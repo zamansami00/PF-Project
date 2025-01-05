@@ -2,6 +2,9 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
+#include <thread>
+#include <chrono>
+#include <atomic>
 
 using namespace std;
 
@@ -11,14 +14,13 @@ using namespace std;
 struct Card 
 {
     char color[10];  //INFO: Card color Red, Green, Blue, Yellow, Wild 
-
     int value;       //INFO: Card value -1: Skip, -2: Reverse, -3: Draw Two, -4: Wild, -5: Wild Draw Four 
 };
 
 struct Player 
 {
     char name[50];     //INFO: Player's name 
-    Card hand[CARDS_PER_PLAYER]; //TODO: Player's cards 
+    Card hand[CARDS_PER_PLAYER + 10]; //TODO: Player's cards (extra space for added cards) 
     int handCount;     //INFO: Number of cards in the player's hand 
 };
 
@@ -39,7 +41,8 @@ void initializeDeck(Card deck[])
             index++;
 
             if (num != 0) 
-            { //INFO: Add special cards 
+            {
+                //INFO: Add special cards 
                 strcpy(deck[index].color, colors[i]);
                 deck[index].value = -1; //INFO: Skip 
                 index++;
@@ -69,7 +72,6 @@ void initializeDeck(Card deck[])
     } 
 }
 
-
 //TODO: Shuffle the deck 
 
 void shuffleDeck(Card deck[]) 
@@ -92,26 +94,31 @@ void dealCards(Player &player, Card deck[], int &currentIndex)
     player.handCount = CARDS_PER_PLAYER;
 }
 
- //INFO: Print a card 
+//INFO: Print a card 
 
 void printCard(const Card &card) 
 {
     if (card.value >= 0) 
     {
         cout << card.color << " " << card.value;
-    } else if (card.value == -1) 
+    }
+     else if (card.value == -1) 
     {
         cout << card.color << " Skip";
-    } else if (card.value == -2) 
+    }
+     else if (card.value == -2) 
     {
         cout << card.color << " Reverse";
-    } else if (card.value == -3) 
+    }
+     else if (card.value == -3) 
     {
         cout << card.color << " Draw Two";
-    } else if (card.value == -4) 
+    }
+     else if (card.value == -4) 
     {
         cout << "Wild";
-    } else if (card.value == -5) 
+    }
+     else if (card.value == -5) 
     {
         cout << "Wild Draw Four";
     }
@@ -125,7 +132,13 @@ bool canPlay(const Card &card, const Card &topCard)
     return (card.value == -4 || card.value == -5 || card.value == topCard.value || strcmp(card.color, topCard.color) == 0);
 }
 
-                                              //HACK: Main game 
+//INFO: Draw a card for a player
+void drawCard(Player &player, Card deck[], int &currentIndex)
+{
+    player.hand[player.handCount++] = deck[currentIndex++];
+}
+
+//HACK: Main game 
 
 int main() 
 {
@@ -149,6 +162,17 @@ int main()
 
     Card topCard = deck[currentIndex++];
     int currentPlayer = 0;
+    atomic<bool> timeout(false);
+    atomic<bool> gameOver(false);
+
+    // Game timer thread
+    thread gameTimer([&]() {
+        this_thread::sleep_for(chrono::minutes(5));
+        if (!gameOver) {
+            cout << "\nGame over! No winner after 5 minutes.\n";
+            exit(0);
+        }
+    });
 
     while (true) 
     {
@@ -163,31 +187,56 @@ int main()
             printCard(players[currentPlayer].hand[i]);
         }
 
-        int choice;
-        cout << "Choose a card to play (1-" << players[currentPlayer].handCount << "): ";
-        cin >> choice;
-        choice--;
+        timeout = false;
+        int choice = -1;
+        atomic<bool> inputReceived(false);
 
-        if (choice < 0 || choice >= players[currentPlayer].handCount || !canPlay(players[currentPlayer].hand[choice], topCard)) 
-        {
-            cout << "Invalid choice! Try again.\n";
+        // Timer thread
+        thread timerThread([&]() {
+            this_thread::sleep_for(chrono::seconds(10));
+            if (!inputReceived) {
+                timeout = true;
+                cout << "Time's over!\n";
+            }
+        });
+
+        // Input thread
+        thread inputThread([&]() {
+            cout << "Choose a card to play (1-" << players[currentPlayer].handCount << "): ";
+            cin >> choice;
+            inputReceived = true;
+        });
+
+        timerThread.join();
+        inputThread.join(); // Ensure both threads finish before proceeding.
+
+        if (timeout) {
+            drawCard(players[currentPlayer], deck, currentIndex);
+            currentPlayer = (currentPlayer + 1) % 4;
             continue;
         }
 
+        if (choice < 1 || choice > players[currentPlayer].handCount || 
+            !canPlay(players[currentPlayer].hand[choice - 1], topCard)) {
+            cout << "Invalid choice! You draw a card.\n";
+            drawCard(players[currentPlayer], deck, currentIndex);
+            currentPlayer = (currentPlayer + 1) % 4;
+            continue;
+        }
+
+        // Process valid choice
+        choice--;
         topCard = players[currentPlayer].hand[choice];
 
-        //INFO: Remove the played card from the player's hand 
-
-        for (int i = choice; i < players[currentPlayer].handCount - 1; i++) 
-        {
+        // Remove the played card
+        for (int i = choice; i < players[currentPlayer].handCount - 1; i++) {
             players[currentPlayer].hand[i] = players[currentPlayer].hand[i + 1];
         }
         players[currentPlayer].handCount--;
 
-        //INFO: Check if the player has won 
-
-        if (players[currentPlayer].handCount == 0) 
-        {
+        // Check if the player has won
+        if (players[currentPlayer].handCount == 0) {
+            gameOver = true;
             cout << players[currentPlayer].name << " wins the game!\n";
             break;
         }
@@ -195,5 +244,6 @@ int main()
         currentPlayer = (currentPlayer + 1) % 4;
     }
 
+    gameTimer.join(); // Ensure game timer thread finishes before exiting.
     return 0;
 }
